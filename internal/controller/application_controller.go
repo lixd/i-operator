@@ -19,7 +19,10 @@ package controller
 import (
 	"context"
 	"fmt"
-	"github.com/lixd/i-operator/api/v1"
+	"reflect"
+	"time"
+
+	v1 "github.com/lixd/i-operator/api/v1"
 	pkgerror "github.com/pkg/errors"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -29,12 +32,10 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/utils/ptr"
-	"reflect"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
-	"time"
 )
 
 const (
@@ -62,7 +63,7 @@ type ApplicationReconciler struct {
 // - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.19.1/pkg/reconcile
 func (r *ApplicationReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	_ = log.FromContext(ctx)
-
+	log.Log.Info("reconcile application", "app", req.NamespacedName)
 	// query app
 	var app v1.Application
 	err := r.Get(ctx, req.NamespacedName, &app)
@@ -78,6 +79,7 @@ func (r *ApplicationReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		// The object is not being deleted, so if it does not have our finalizer,
 		// then lets add the finalizer and update the object.
 		if !sets.NewString(app.ObjectMeta.Finalizers...).Has(AppFinalizer) {
+			log.Log.Info("new app,add finalizer", "app", req.NamespacedName)
 			app.ObjectMeta.Finalizers = append(app.ObjectMeta.Finalizers, AppFinalizer)
 			if err = r.Update(ctx, &app); err != nil {
 				log.Log.Error(err, "unable to add finalizer to application", "app", req.NamespacedName)
@@ -89,13 +91,23 @@ func (r *ApplicationReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		// if our finalizer is present, handle deletion
 		// if not present, maybe clean up was already done,do nothing
 		if sets.NewString(app.ObjectMeta.Finalizers...).Has(AppFinalizer) {
+			log.Log.Info("app deleted, clean up", "app", req.NamespacedName)
+
 			if err = r.syncAppDisable(ctx, app); err != nil {
 				log.Log.Error(err, "unable to clean up application", "app", req.NamespacedName)
 				return ctrl.Result{}, err
 			}
+			// remove our finalizer from the list and update it.
+			app.ObjectMeta.Finalizers = sets.NewString(app.ObjectMeta.Finalizers...).Delete(AppFinalizer).UnsortedList()
+			if err = r.Update(ctx, &app); err != nil {
+				log.Log.Error(err, "unable to delete finalizer", "app", req.NamespacedName)
+				return ctrl.Result{}, err
+			}
 		}
+		// if no finalizer,do nothing
+		return ctrl.Result{}, nil
 	}
-
+	log.Log.Info("reconcile application", "app", req.NamespacedName)
 	if err = r.syncApp(ctx, app); err != nil {
 		log.Log.Error(err, "unable to sync application", "app", req.NamespacedName)
 		return ctrl.Result{}, err
@@ -114,12 +126,12 @@ func (r *ApplicationReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	// now,if ready replicas is gt 1,set status to true
 	copyApp.Status.Ready = deploy.Status.ReadyReplicas >= 1
 	if !reflect.DeepEqual(app, copyApp) { // update when changed
-		if err = r.Update(ctx, &app); err != nil {
+		log.Log.Info("sync app status", "app", req.NamespacedName)
+		if err = r.Client.Status().Update(ctx, copyApp); err != nil {
 			log.Log.Error(err, "unable to update application status", "app", req.NamespacedName)
 			return ctrl.Result{}, err
 		}
 	}
-
 	// Requeue every 5 minutes,to keep application always ready
 	return ctrl.Result{RequeueAfter: time.Minute * 5}, nil
 }
@@ -172,6 +184,9 @@ func (r *ApplicationReconciler) syncAppDisable(ctx context.Context, app v1.Appli
 		}
 		return pkgerror.WithMessagef(err, "unable to fetch deployment [%s]", objKey.String())
 	}
+
+	log.Log.Info("reconcile application delete deployment", "app", app.Namespace, "deployment", objKey.Name)
+
 	if err = r.Delete(ctx, &deploy); err != nil {
 		return pkgerror.WithMessage(err, "unable to delete deployment")
 	}
@@ -184,6 +199,7 @@ func (r *ApplicationReconciler) syncAppEnabled(ctx context.Context, app v1.Appli
 	err := r.Get(ctx, objKey, &deploy)
 	if err != nil {
 		if errors.IsNotFound(err) {
+			log.Log.Info("reconcile application create deployment", "app", app.Namespace, "deployment", objKey.Name)
 			deploy = generateDeployment(app)
 			if err = r.Create(ctx, &deploy); err != nil {
 				return pkgerror.WithMessage(err, "unable to create deployment")
@@ -193,6 +209,7 @@ func (r *ApplicationReconciler) syncAppEnabled(ctx context.Context, app v1.Appli
 	}
 	// update deployment if needed
 	if !equal(app, deploy) {
+		log.Log.Info("reconcile application update deployment", "app", app.Namespace, "deployment", objKey.Name)
 		deploy.Spec.Template.Spec.Containers[0].Image = app.Spec.Image
 		if err = r.Update(ctx, &deploy); err != nil {
 			return pkgerror.WithMessage(err, "unable to update deployment")
@@ -204,7 +221,8 @@ func (r *ApplicationReconciler) syncAppEnabled(ctx context.Context, app v1.Appli
 func generateDeployment(app v1.Application) appsv1.Deployment {
 	return appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: deploymentName(app.Name),
+			Name:      deploymentName(app.Name),
+			Namespace: app.Namespace,
 			Labels: map[string]string{
 				"app": app.Name,
 			},
@@ -227,11 +245,11 @@ func generateDeployment(app v1.Application) appsv1.Deployment {
 						{
 							Name:  app.Name,
 							Image: app.Spec.Image,
-							//Ports: []corev1.ContainerPort{
+							// Ports: []corev1.ContainerPort{
 							//	{
 							//		ContainerPort: 80,
 							//	},
-							//},
+							// },
 						},
 					},
 				},

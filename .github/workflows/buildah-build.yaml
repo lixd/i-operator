@@ -1,0 +1,50 @@
+name: Build and Push Multi-Arch Image
+
+on:
+  push:
+
+env:
+  IMAGE_NAME: i-operator
+  IMAGE_TAG: latest
+  IMAGE_REGISTRY: docker.io
+  IMAGE_NAMESPACE: lixd96
+
+jobs:
+  build:
+    name: Build and Push Multi-Architecture Image
+    runs-on: ubuntu-20.04
+
+    steps:
+      # Checkout the repository
+      - name: Checkout repository
+        uses: actions/checkout@v2
+
+      # Set up QEMU for cross-platform builds
+      - name: Set up QEMU for multi-arch support
+        uses: docker/setup-qemu-action@v1
+
+      # Build the Docker image using Buildah
+      - name: Build multi-architecture image
+        id: build-image
+        uses: redhat-actions/buildah-build@v2
+        with:
+          image: ${{ env.IMAGE_NAME }}
+          tags: ${{ env.IMAGE_TAG }}
+          archs: amd64,ppc64le,s390x,arm64  # Specify the architectures for multi-arch support
+          dockerfiles: |
+            ./Dockerfile
+
+      # Push the built image to the specified container registry
+      - name: Push image to registry
+        id: push-to-registry
+        uses: redhat-actions/push-to-registry@v2
+        with:
+          image: ${{ steps.build-image.outputs.image }}
+          tags: ${{ steps.build-image.outputs.tags }}
+          registry: ${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}
+          username: ${{ secrets.REGISTRY_USERNAME }}  # Secure registry username
+          password: ${{ secrets.REGISTRY_PASSWORD }}  # Secure registry password
+
+      # Print the image URL after the image has been pushed
+      - name: Print pushed image URL
+        run: echo "Image pushed to ${{ steps.push-to-registry.outputs.registry-paths }}"

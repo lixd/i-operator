@@ -1,8 +1,33 @@
 # i-operator
-// TODO(user): Add simple overview of use/purpose
+Demo for how to create kubernetes operator by kubebuilder.
 
 ## Description
-// TODO(user): An in-depth paragraph about your project and overview of use
+Create a custom resource (CR) named `Application` with the following fields:
+* spec.Image：The image name of the application.
+* spec.Enabled：Whether the application is enabled or not.
+* status.Ready: Whether the application is ready or not.
+
+Operator Logic:
+* When Create Application, the operator will create a deployment with the image specified by `spec.Image`.
+* When the deployment is ready, the operator will update the status of the Application to `Ready`.
+* When Update Application, the operator will update the image of the deployment to the image specified by `spec.Image`.
+* When Application is deleted or set `spec.Enabled` to false, the operator will delete the deployment.
+
+## Test
+### Install
+install the CRDs and Controller into the cluster:
+```bash 
+kubectl apply -f deploy/install.yaml
+```
+
+### Create App
+create an Application:
+```bash 
+kubectl apply -f deploy/app.yaml
+```
+
+and now,you can see the deployment created by the operator.
+
 
 ## Getting Started
 

@@ -1,0 +1,8 @@
+apiVersion: core.crd.lixueduan.com/v1
+kind: Application
+metadata:
+  name: demo
+  namespace: default
+spec:
+  enabled: true
+  image: "nginx:1.22"

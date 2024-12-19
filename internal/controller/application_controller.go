@@ -93,10 +93,13 @@ func (r *ApplicationReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		if sets.NewString(app.ObjectMeta.Finalizers...).Has(AppFinalizer) {
 			log.Log.Info("app deleted, clean up", "app", req.NamespacedName)
 
-			if err = r.syncAppDisable(ctx, app); err != nil {
-				log.Log.Error(err, "unable to clean up application", "app", req.NamespacedName)
-				return ctrl.Result{}, err
-			}
+			// do clean up
+			// instead by k8s gc,just set ownerReference to deployment when creat
+			// if err = r.syncAppDisable(ctx, app); err != nil {
+			//	log.Log.Error(err, "unable to clean up application", "app", req.NamespacedName)
+			//	return ctrl.Result{}, err
+			// }
+
 			// remove our finalizer from the list and update it.
 			app.ObjectMeta.Finalizers = sets.NewString(app.ObjectMeta.Finalizers...).Delete(AppFinalizer).UnsortedList()
 			if err = r.Update(ctx, &app); err != nil {
@@ -152,14 +155,6 @@ func (r *ApplicationReconciler) SetupWithManager(mgr ctrl.Manager) error {
 				},
 				}}
 			})).
-		Named("application").
-		Complete(r)
-}
-
-// SetupWithManager sets up the controller with the Manager.
-func (r *ApplicationReconciler) SetupWithManager2(mgr ctrl.Manager) error {
-	return ctrl.NewControllerManagedBy(mgr).
-		For(&v1.Application{}).
 		Named("application").
 		Complete(r)
 }
@@ -226,6 +221,17 @@ func generateDeployment(app v1.Application) appsv1.Deployment {
 			Labels: map[string]string{
 				"app": app.Name,
 			},
+			// Set the owner reference,then k8s gc will delete deployment when app deleted
+			// and when deployment updated,will trigger Application controller to reconcile again
+			OwnerReferences: []metav1.OwnerReference{
+				{
+					APIVersion:         "v1",
+					Kind:               "Application",
+					Name:               app.Name,
+					UID:                app.UID,
+					Controller:         ptr.To(true),
+					BlockOwnerDeletion: ptr.To(true),
+				}},
 		},
 		Spec: appsv1.DeploymentSpec{
 			Replicas: ptr.To(int32(1)), // 副本数

@@ -37,6 +37,7 @@ import (
 
 	corev1 "github.com/lixd/i-operator/api/v1"
 	"github.com/lixd/i-operator/internal/controller"
+	webhookcorev1 "github.com/lixd/i-operator/internal/webhook/v1"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -93,7 +94,10 @@ func main() {
 	}
 
 	webhookServer := webhook.NewServer(webhook.Options{
-		TLSOpts: tlsOpts,
+		TLSOpts:  tlsOpts,
+		CertDir:  "/tmp/certs",
+		CertName: "webhook.crt",
+		KeyName:  "webhook.key",
 	})
 
 	// Metrics endpoint is enabled in 'config/default/kustomization.yaml'. The Metrics options configure the server.
@@ -148,6 +152,13 @@ func main() {
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Application")
 		os.Exit(1)
+	}
+	// nolint:goconst
+	if os.Getenv("ENABLE_WEBHOOKS") != "false" {
+		if err = webhookcorev1.SetupApplicationWebhookWithManager(mgr); err != nil {
+			setupLog.Error(err, "unable to create webhook", "webhook", "Application")
+			os.Exit(1)
+		}
 	}
 	// +kubebuilder:scaffold:builder
 

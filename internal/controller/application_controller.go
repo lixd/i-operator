@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"time"
 
 	v1 "github.com/lixd/i-operator/api/v1"
@@ -30,7 +31,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -62,57 +62,60 @@ type ApplicationReconciler struct {
 // For more details, check Reconcile and its Result here:
 // - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.19.1/pkg/reconcile
 func (r *ApplicationReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	_ = log.FromContext(ctx)
-	log.Log.Info("reconcile application", "app", req.NamespacedName)
+
+	logger := log.FromContext(ctx)
+	log := logger.WithValues("application", req.NamespacedName)
+
+	log.Info("start reconcile")
 	// query app
 	var app v1.Application
 	err := r.Get(ctx, req.NamespacedName, &app)
 	if err != nil {
-		if errors.IsNotFound(err) { // object already deleted
-			return ctrl.Result{}, nil
-		}
-		log.Log.Error(err, "unable to fetch application", "app", req.NamespacedName)
-		return ctrl.Result{}, err
+		log.Error(err, "unable to fetch application")
+		// we'll ignore not-found errors, since they can't be fixed by an immediate
+		// requeue (we'll need to wait for a new notification), and we can get them
+		// on deleted requests.
+		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
+	// examine DeletionTimestamp to determine if object is under deletion
 	if app.ObjectMeta.DeletionTimestamp.IsZero() {
 		// The object is not being deleted, so if it does not have our finalizer,
-		// then lets add the finalizer and update the object.
-		if !sets.NewString(app.ObjectMeta.Finalizers...).Has(AppFinalizer) {
-			log.Log.Info("new app,add finalizer", "app", req.NamespacedName)
-			app.ObjectMeta.Finalizers = append(app.ObjectMeta.Finalizers, AppFinalizer)
+		// then lets add the finalizer and update the object. This is equivalent
+		// to registering our finalizer.
+		if !controllerutil.ContainsFinalizer(&app, AppFinalizer) {
+			controllerutil.AddFinalizer(&app, AppFinalizer)
 			if err = r.Update(ctx, &app); err != nil {
-				log.Log.Error(err, "unable to add finalizer to application", "app", req.NamespacedName)
+				log.Error(err, "unable to add finalizer to application")
 				return ctrl.Result{}, err
 			}
 		}
 	} else {
 		// The object is being deleted
-		// if our finalizer is present, handle deletion
-		// if not present, maybe clean up was already done,do nothing
-		if sets.NewString(app.ObjectMeta.Finalizers...).Has(AppFinalizer) {
-			log.Log.Info("app deleted, clean up", "app", req.NamespacedName)
-
-			// do clean up
-			// instead by k8s gc,just set ownerReference to deployment when creat
-			// if err = r.syncAppDisable(ctx, app); err != nil {
-			//	log.Log.Error(err, "unable to clean up application", "app", req.NamespacedName)
-			//	return ctrl.Result{}, err
-			// }
+		if controllerutil.ContainsFinalizer(&app, AppFinalizer) {
+			// our finalizer is present, so lets handle any external dependency
+			if err = r.deleteExternalResources(&app); err != nil {
+				log.Error(err, "unable to cleanup application")
+				// if fail to delete the external dependency here, return with error
+				// so that it can be retried.
+				return ctrl.Result{}, err
+			}
 
 			// remove our finalizer from the list and update it.
-			app.ObjectMeta.Finalizers = sets.NewString(app.ObjectMeta.Finalizers...).Delete(AppFinalizer).UnsortedList()
+			controllerutil.RemoveFinalizer(&app, AppFinalizer)
 			if err = r.Update(ctx, &app); err != nil {
-				log.Log.Error(err, "unable to delete finalizer", "app", req.NamespacedName)
 				return ctrl.Result{}, err
 			}
 		}
-		// if no finalizer,do nothing
+
+		// Stop reconciliation as the item is being deleted
 		return ctrl.Result{}, nil
 	}
-	log.Log.Info("reconcile application", "app", req.NamespacedName)
+
+	// Your reconcile logic
+	log.Info("run reconcile logic")
 	if err = r.syncApp(ctx, app); err != nil {
-		log.Log.Error(err, "unable to sync application", "app", req.NamespacedName)
+		log.Error(err, "unable to sync application")
 		return ctrl.Result{}, err
 	}
 	// sync status
@@ -120,21 +123,20 @@ func (r *ApplicationReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	objKey := client.ObjectKey{Namespace: app.Namespace, Name: deploymentName(app.Name)}
 	err = r.Get(ctx, objKey, &deploy)
 	if err != nil {
-		if errors.IsNotFound(err) {
-			return ctrl.Result{}, nil
-		}
-		return ctrl.Result{}, err
+		log.Error(err, "unable to fetch deployment", "deployment", objKey.String())
+		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 	copyApp := app.DeepCopy()
 	// now,if ready replicas is gt 1,set status to true
 	copyApp.Status.Ready = deploy.Status.ReadyReplicas >= 1
 	if !reflect.DeepEqual(app, copyApp) { // update when changed
-		log.Log.Info("sync app status", "app", req.NamespacedName)
+		log.Info("app changed,update app status")
 		if err = r.Client.Status().Update(ctx, copyApp); err != nil {
-			log.Log.Error(err, "unable to update application status", "app", req.NamespacedName)
+			log.Error(err, "unable to update application status")
 			return ctrl.Result{}, err
 		}
 	}
+
 	// Requeue every 5 minutes,to keep application always ready
 	return ctrl.Result{RequeueAfter: time.Minute * 5}, nil
 }
@@ -271,4 +273,13 @@ func deploymentName(app string) string {
 func equal(app v1.Application, deploy appsv1.Deployment) bool {
 	// only check image for now
 	return deploy.Spec.Template.Spec.Containers[0].Image == app.Spec.Image
+}
+
+func (r *ApplicationReconciler) deleteExternalResources(app *v1.Application) error {
+	//
+	// delete any external resources associated with the cronJob
+	//
+	// Ensure that delete implementation is idempotent and safe to invoke
+	// multiple times for same object.
+	return nil
 }

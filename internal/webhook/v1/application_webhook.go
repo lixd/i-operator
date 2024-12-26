@@ -96,7 +96,7 @@ func (v *ApplicationCustomValidator) ValidateCreate(ctx context.Context, obj run
 	}
 	applicationlog.Info("Validation for Application upon creation", "name", application.GetName())
 
-	if isValidImageName(application.Spec.Image) {
+	if !isValidImageName(application.Spec.Image) {
 		return nil, fmt.Errorf("invalid image name: %s", application.Spec.Image)
 	}
 
@@ -111,7 +111,7 @@ func (v *ApplicationCustomValidator) ValidateUpdate(ctx context.Context, oldObj,
 	}
 	applicationlog.Info("Validation for Application upon update", "name", application.GetName())
 
-	if isValidImageName(application.Spec.Image) {
+	if !isValidImageName(application.Spec.Image) {
 		return nil, fmt.Errorf("invalid image name: %s", application.Spec.Image)
 	}
 

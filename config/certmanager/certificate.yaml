@@ -29,6 +29,8 @@ spec:
   dnsNames:
   - SERVICE_NAME.SERVICE_NAMESPACE.svc
   - SERVICE_NAME.SERVICE_NAMESPACE.svc.cluster.local
+  ipAddresses: # 新增关于 node-ip 的配置
+    - 172.16.1.242
   issuerRef:
     kind: Issuer
     name: selfsigned-issuer

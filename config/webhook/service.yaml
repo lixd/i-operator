@@ -11,5 +11,19 @@ spec:
     - port: 443
       protocol: TCP
       targetPort: 9443
+  # comment This selector block when local debug
   selector:
     control-plane: controller-manager
+---
+# uncomment this endpoint object when local debug
+#apiVersion: v1
+#kind: Endpoints
+#metadata:
+#  name: webhook-service
+#  namespace: system
+#subsets:
+#  - addresses:
+#      - ip: 172.16.1.161
+#    ports:
+#      - port: 9443
+#        protocol: TCP

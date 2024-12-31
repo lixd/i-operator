@@ -5,12 +5,13 @@ metadata:
     app.kubernetes.io/managed-by: kustomize
     app.kubernetes.io/name: i-operator
     control-plane: controller-manager
-  name: i-operator-system
+  name: test
 ---
 apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
+    cert-manager.io/inject-ca-from: test/i-operator-serving-cert
     controller-gen.kubebuilder.io/version: v0.16.4
   name: applications.core.crd.lixueduan.com
 spec:
@@ -19,10 +20,25 @@ spec:
     kind: Application
     listKind: ApplicationList
     plural: applications
+    shortNames:
+    - app
     singular: application
   scope: Namespaced
   versions:
-  - name: v1
+  - additionalPrinterColumns:
+    - jsonPath: .spec.image
+      name: Image
+      type: string
+    - jsonPath: .spec.enabled
+      name: Enabled
+      type: boolean
+    - jsonPath: .status.ready
+      name: Ready
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1
     schema:
       openAPIV3Schema:
         description: Application is the Schema for the applications API.
@@ -71,7 +87,7 @@ metadata:
     app.kubernetes.io/managed-by: kustomize
     app.kubernetes.io/name: i-operator
   name: i-operator-controller-manager
-  namespace: i-operator-system
+  namespace: test
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
@@ -80,7 +96,7 @@ metadata:
     app.kubernetes.io/managed-by: kustomize
     app.kubernetes.io/name: i-operator
   name: i-operator-leader-election-role
-  namespace: i-operator-system
+  namespace: test
 rules:
 - apiGroups:
   - ""
@@ -231,7 +247,7 @@ metadata:
     app.kubernetes.io/managed-by: kustomize
     app.kubernetes.io/name: i-operator
   name: i-operator-leader-election-rolebinding
-  namespace: i-operator-system
+  namespace: test
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
@@ -239,7 +255,7 @@ roleRef:
 subjects:
 - kind: ServiceAccount
   name: i-operator-controller-manager
-  namespace: i-operator-system
+  namespace: test
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -255,7 +271,7 @@ roleRef:
 subjects:
 - kind: ServiceAccount
   name: i-operator-controller-manager
-  namespace: i-operator-system
+  namespace: test
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -268,7 +284,7 @@ roleRef:
 subjects:
 - kind: ServiceAccount
   name: i-operator-controller-manager
-  namespace: i-operator-system
+  namespace: test
 ---
 apiVersion: v1
 kind: Service
@@ -278,13 +294,29 @@ metadata:
     app.kubernetes.io/name: i-operator
     control-plane: controller-manager
   name: i-operator-controller-manager-metrics-service
-  namespace: i-operator-system
+  namespace: test
 spec:
   ports:
   - name: https
     port: 8443
     protocol: TCP
     targetPort: 8443
+  selector:
+    control-plane: controller-manager
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: i-operator
+  name: i-operator-webhook-service
+  namespace: test
+spec:
+  ports:
+  - port: 443
+    protocol: TCP
+    targetPort: 9443
   selector:
     control-plane: controller-manager
 ---
@@ -296,7 +328,7 @@ metadata:
     app.kubernetes.io/name: i-operator
     control-plane: controller-manager
   name: i-operator-controller-manager
-  namespace: i-operator-system
+  namespace: test
 spec:
   replicas: 1
   selector:
@@ -316,7 +348,7 @@ spec:
         - --health-probe-bind-address=:8081
         command:
         - /manager
-        image: lixd96/controller:latest
+        image: controller:latest
         livenessProbe:
           httpGet:
             path: /healthz
@@ -324,6 +356,10 @@ spec:
           initialDelaySeconds: 15
           periodSeconds: 20
         name: manager
+        ports:
+        - containerPort: 9443
+          name: webhook-server
+          protocol: TCP
         readinessProbe:
           httpGet:
             path: /readyz
@@ -342,7 +378,104 @@ spec:
           capabilities:
             drop:
             - ALL
+        volumeMounts:
+        - mountPath: /tmp/k8s-webhook-server/serving-certs
+          name: cert
+          readOnly: true
       securityContext:
         runAsNonRoot: true
       serviceAccountName: i-operator-controller-manager
       terminationGracePeriodSeconds: 10
+      volumes:
+      - name: cert
+        secret:
+          defaultMode: 420
+          secretName: webhook-server-cert
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  labels:
+    app.kubernetes.io/component: certificate
+    app.kubernetes.io/created-by: i-operator
+    app.kubernetes.io/instance: serving-cert
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: certificate
+    app.kubernetes.io/part-of: i-operator
+  name: i-operator-serving-cert
+  namespace: test
+spec:
+  dnsNames:
+  - i-operator-webhook-service.test.svc
+  - i-operator-webhook-service.test.svc.cluster.local
+  issuerRef:
+    kind: Issuer
+    name: i-operator-selfsigned-issuer
+  secretName: webhook-server-cert
+---
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: i-operator
+  name: i-operator-selfsigned-issuer
+  namespace: test
+spec:
+  selfSigned: {}
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingWebhookConfiguration
+metadata:
+  annotations:
+    cert-manager.io/inject-ca-from: test/i-operator-serving-cert
+  name: i-operator-mutating-webhook-configuration
+webhooks:
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: i-operator-webhook-service
+      namespace: test
+      path: /mutate-core-crd-lixueduan-com-v1-application
+  failurePolicy: Fail
+  name: mapplication-v1.lixueduan.com
+  rules:
+  - apiGroups:
+    - core.crd.lixueduan.com
+    apiVersions:
+    - v1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - applications
+  sideEffects: None
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  annotations:
+    cert-manager.io/inject-ca-from: test/i-operator-serving-cert
+  name: i-operator-validating-webhook-configuration
+webhooks:
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: i-operator-webhook-service
+      namespace: test
+      path: /validate-core-crd-lixueduan-com-v1-application
+  failurePolicy: Fail
+  name: vapplication-v1.lixueduan.com
+  rules:
+  - apiGroups:
+    - core.crd.lixueduan.com
+    apiVersions:
+    - v1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - applications
+  sideEffects: None

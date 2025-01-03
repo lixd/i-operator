@@ -19,6 +19,8 @@ package controller
 import (
 	"context"
 
+	"k8s.io/client-go/tools/record"
+
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -68,9 +70,12 @@ var _ = Describe("Application Controller", func() {
 		})
 		It("should successfully reconcile the resource", func() {
 			By("Reconciling the created resource")
+
 			controllerReconciler := &ApplicationReconciler{
 				Client: k8sClient,
 				Scheme: k8sClient.Scheme(),
+				// Note that we added the following line:
+				Recorder: &record.FakeRecorder{},
 			}
 
 			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{

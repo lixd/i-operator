@@ -22,6 +22,8 @@ import (
 	"reflect"
 	"time"
 
+	"k8s.io/client-go/tools/record"
+
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	v1 "github.com/lixd/i-operator/api/v1"
@@ -47,6 +49,8 @@ const (
 type ApplicationReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
+	// See that we added the following code to allow us to pass the record.EventRecorder
+	Recorder record.EventRecorder
 }
 
 // +kubebuilder:rbac:groups=core.crd.lixueduan.com,resources=applications,verbs=get;list;watch;create;update;patch;delete
@@ -90,6 +94,7 @@ func (r *ApplicationReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 				log.Error(err, "unable to add finalizer to application")
 				return ctrl.Result{}, err
 			}
+			r.Recorder.Eventf(&app, corev1.EventTypeNormal, "AddFinalizer", fmt.Sprintf("add finalizer %s", AppFinalizer))
 		}
 	} else {
 		// The object is being deleted
@@ -107,6 +112,7 @@ func (r *ApplicationReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 			if err = r.Update(ctx, &app); err != nil {
 				return ctrl.Result{}, err
 			}
+			r.Recorder.Eventf(&app, corev1.EventTypeNormal, "RemoveFinalizer", fmt.Sprintf("remove finalizer %s", AppFinalizer))
 		}
 
 		// Stop reconciliation as the item is being deleted
@@ -119,6 +125,7 @@ func (r *ApplicationReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		log.Error(err, "unable to sync application")
 		return ctrl.Result{}, err
 	}
+
 	// sync status
 	var deploy appsv1.Deployment
 	objKey := client.ObjectKey{Namespace: app.Namespace, Name: deploymentName(app.Name)}
@@ -136,6 +143,7 @@ func (r *ApplicationReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 			log.Error(err, "unable to update application status")
 			return ctrl.Result{}, err
 		}
+		r.Recorder.Eventf(&app, corev1.EventTypeNormal, "UpdateStatus", fmt.Sprintf("update status from %v to %v", app.Status, copyApp.Status))
 	}
 
 	// Requeue every 5 minutes,to keep application always ready

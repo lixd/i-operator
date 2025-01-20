@@ -206,7 +206,7 @@ func (r *ApplicationReconciler) syncAppEnabled(ctx context.Context, app v1.Appli
 	if err != nil {
 		if errors.IsNotFound(err) {
 			log.Log.Info("reconcile application create deployment", "app", app.Namespace, "deployment", objKey.Name)
-			deploy = generateDeployment(app)
+			deploy = r.generateDeployment(app)
 			if err = r.Create(ctx, &deploy); err != nil {
 				return pkgerror.WithMessage(err, "unable to create deployment")
 			}
@@ -224,25 +224,14 @@ func (r *ApplicationReconciler) syncAppEnabled(ctx context.Context, app v1.Appli
 	return nil
 }
 
-func generateDeployment(app v1.Application) appsv1.Deployment {
-	return appsv1.Deployment{
+func (r *ApplicationReconciler) generateDeployment(app v1.Application) appsv1.Deployment {
+	deploy := appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      deploymentName(app.Name),
 			Namespace: app.Namespace,
 			Labels: map[string]string{
 				"app": app.Name,
 			},
-			// Set the owner reference,then k8s gc will delete deployment when app deleted
-			// and when deployment updated,will trigger Application controller to reconcile again
-			OwnerReferences: []metav1.OwnerReference{
-				{
-					APIVersion:         "v1",
-					Kind:               "Application",
-					Name:               app.Name,
-					UID:                app.UID,
-					Controller:         ptr.To(true),
-					BlockOwnerDeletion: ptr.To(true),
-				}},
 		},
 		Spec: appsv1.DeploymentSpec{
 			Replicas: ptr.To(int32(1)), // 副本数
@@ -273,6 +262,10 @@ func generateDeployment(app v1.Application) appsv1.Deployment {
 			},
 		},
 	}
+	// Set the ownerRef for the Deployment, ensuring that the Deployment
+	// will be deleted when the Application CR is deleted.
+	_ = controllerutil.SetControllerReference(&app, &deploy, r.Scheme)
+	return deploy
 }
 
 func deploymentName(app string) string {

@@ -33,11 +33,9 @@ import (
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
@@ -56,6 +54,7 @@ type ApplicationReconciler struct {
 // +kubebuilder:rbac:groups=core.crd.lixueduan.com,resources=applications,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=core.crd.lixueduan.com,resources=applications/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=core.crd.lixueduan.com,resources=applications/finalizers,verbs=update
+// +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -154,18 +153,19 @@ func (r *ApplicationReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 func (r *ApplicationReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&v1.Application{}).
-		Watches(&appsv1.Deployment{},
-			handler.EnqueueRequestsFromMapFunc(func(ctx context.Context, obj client.Object) []ctrl.Request {
-				app, ok := obj.GetLabels()["app"]
-				if !ok { // if no app label,means not owned by app,do nothing
-					return nil
-				}
-				return []ctrl.Request{{NamespacedName: types.NamespacedName{
-					Namespace: obj.GetNamespace(),
-					Name:      app, // return name is app name,not deployment name
-				},
-				}}
-			})).
+		Owns(&appsv1.Deployment{}).
+		//Watches(&appsv1.Deployment{},
+		//	handler.EnqueueRequestsFromMapFunc(func(ctx context.Context, obj client.Object) []ctrl.Request {
+		//		app, ok := obj.GetLabels()["app"]
+		//		if !ok { // if no app label,means not owned by app,do nothing
+		//			return nil
+		//		}
+		//		return []ctrl.Request{{NamespacedName: types.NamespacedName{
+		//			Namespace: obj.GetNamespace(),
+		//			Name:      app, // return name is app name,not deployment name
+		//		},
+		//		}}
+		//	}), builder.WithPredicates(updatePred)).
 		Named("application").
 		Complete(r)
 }
